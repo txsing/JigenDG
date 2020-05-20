@@ -1,7 +1,10 @@
 import argparse
 
+import os
+os.environ['CUDA_VISIBLE_DEVICES']='2, 3'
+
 import torch
-from IPython.core.debugger import set_trace
+#from IPython.core.debugger import set_trace
 from torch import nn
 from torch.nn import functional as F
 from data import data_helper
@@ -36,16 +39,16 @@ def get_args():
     parser.add_argument("--network", choices=model_factory.nets_map.keys(), help="Which network to use", default="caffenet")
     parser.add_argument("--jig_weight", type=float, default=0.1, help="Weight for the jigsaw puzzle")
     parser.add_argument("--ooo_weight", type=float, default=0, help="Weight for odd one out task")
-    parser.add_argument("--tf_logger", type=bool, default=True, help="If true will save tensorboard compatible logs")
+    parser.add_argument("--tf_logger", default=True, help="If true will save tensorboard compatible logs")
     parser.add_argument("--val_size", type=float, default="0.1", help="Validation size (between 0 and 1)")
     parser.add_argument("--folder_name", default=None, help="Used by the logger to save logs")
     parser.add_argument("--bias_whole_image", default=None, type=float, help="If set, will bias the training procedure to show more often the whole image")
-    parser.add_argument("--TTA", type=bool, action='store_true', help="Activate test time data augmentation")
-    parser.add_argument("--classify_only_sane", action='store_true', type=bool,
+    parser.add_argument("--TTA",  action='store_false', help="Activate test time data augmentation")
+    parser.add_argument("--classify_only_sane", action='store_true',
                         help="If true, the network will only try to classify the non scrambled images")
-    parser.add_argument("--train_all", action='store_true', type=bool, help="If true, all network weights will be trained")
+    parser.add_argument("--train_all", action='store_true', help="If true, all network weights will be trained")
     parser.add_argument("--suffix", default="", help="Suffix for the logger")
-    parser.add_argument("--nesterov", action='store_true', type=bool, help="Use nesterov")
+    parser.add_argument("--nesterov", action='store_true', help="Use nesterov")
     
     return parser.parse_args()
 
