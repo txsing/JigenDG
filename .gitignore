@@ -4,3 +4,4 @@ data/txt_lists/*
 */__pycache__/*
 .idea/*
 logs/*
+*.pyc
