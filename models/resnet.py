@@ -28,8 +28,14 @@ class ResNet(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
+    # stride 参数决定了 该 Residual Layer 的第一个 block 的 stride，进而决定了这个layer 会不会缩减图片尺寸
+    # res18 里只有第一个 Layer 不需要缩减，其他 Layer 都需要减半尺寸
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
+        # stride ！=1 意味着，第一个 block 需要缩减 size（第一个 block 的 X 和 Y 都需要进行 size 调整）， downsample 调整 X
+        # block.expansion 是针对 Bottleneck Block，该类型 Block 会 4 倍地 expand input dimensions 
+        # 所以其实 downsample 这里做了两件事 1. 调整 size  2. 调整 dimensions
+        # 每一个 Layer 都有且只有一个 downsample
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
                 nn.Conv2d(self.inplanes, planes * block.expansion,
@@ -38,10 +44,10 @@ class ResNet(nn.Module):
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample))
+        layers.append(block(self.inplanes, planes, stride, downsample)) # 第一个 Block 用了 stride 参数，改变 size 且使用 downsample
         self.inplanes = planes * block.expansion
         for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes))
+            layers.append(block(self.inplanes, planes)) # 后面就默认为1，不改变 size
 
         return nn.Sequential(*layers)
 

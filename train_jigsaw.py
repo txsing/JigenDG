@@ -48,6 +48,7 @@ def get_args():
                         help="If true, the network will only try to classify the non scrambled images")
     parser.add_argument("--train_all", action='store_true', help="If true, all network weights will be trained")
     parser.add_argument("--suffix", default="", help="Suffix for the logger")
+    # nesterov 是一种梯度下降的方法
     parser.add_argument("--nesterov", action='store_true', help="Use nesterov")
     
     return parser.parse_args()
@@ -97,16 +98,19 @@ class Trainer:
             jigsaw_loss = criterion(jigsaw_logit, jig_l)
             # domain_loss = criterion(domain_logit, d_idx)
             # domain_error = domain_loss.item()
-            if self.only_non_scrambled:
+
+            if self.only_non_scrambled: # 只对正常图片进行物种分类
                 if self.target_id is not None:
+                    # 图片没有被打乱 && 图片的 domain 不是 target domain
+                    #（因为我们不训练target domain，target domain的图片只用来 predict）
                     idx = (jig_l == 0) & (d_idx != self.target_id)
                     class_loss = criterion(class_logit[idx], class_l[idx])
                 else:
                     class_loss = criterion(class_logit[jig_l == 0], class_l[jig_l == 0])
 
-            elif self.target_id:
+            elif self.target_id: # 对所有（包括打乱的）图片进行物种分类，target domain 只用于 predict
                 class_loss = criterion(class_logit[d_idx != self.target_id], class_l[d_idx != self.target_id])
-            else:
+            else: # 对所有（包括打乱的）图片进行物种分类，target domain 只用于 predict
                 class_loss = criterion(class_logit, class_l)
             _, cls_pred = class_logit.max(dim=1)
             _, jig_pred = jigsaw_logit.max(dim=1)
@@ -117,14 +121,17 @@ class Trainer:
             self.optimizer.step()
 
             self.logger.log(it, len(self.source_loader),
-                            {"jigsaw": jigsaw_loss.item(), "class": class_loss.item()  # , "domain": domain_loss.item()
-                             },
+                            {"jigsaw": jigsaw_loss.item(),
+                             "class": class_loss.item()
+                            #"domain": domain_loss.item()
+                            },
                             # ,"lambda": lambda_val},
                             {"jigsaw": torch.sum(jig_pred == jig_l.data).item(),
                              "class": torch.sum(cls_pred == class_l.data).item(),
-                             # "domain": torch.sum(domain_pred == d_idx.data).item()
-                             },
+                            #"domain": torch.sum(domain_pred == d_idx.data).item()
+                            },
                             data.shape[0])
+            # 解除变量引用与实际值的指向关系
             del loss, class_loss, jigsaw_loss, jigsaw_logit, class_logit
 
         self.model.eval()

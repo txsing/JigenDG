@@ -78,6 +78,7 @@ class JigsawDataset(data.Dataset):
         img = Image.open(framename).convert('RGB')
         return self._image_transformer(img)
         
+    # 返回数据集里第 i 张图片的打乱版本 & 打乱的 permutation 序号 & 原始图片对应的 ClassLabel
     def __getitem__(self, index):
         img = self.get_image(index)
         n_grids = self.grid_size ** 2
@@ -136,6 +137,7 @@ class JigsawTestDatasetMultiple(JigsawDataset):
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
 
+    #返回 dataset 里指定 index 的原图和 10（P/3）张打乱的图 & 对应的 order & classLabel
     def __getitem__(self, index):
         framename = self.data_path + '/' + self.names[index]
         _img = Image.open(framename).convert('RGB')

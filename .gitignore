@@ -5,3 +5,4 @@ data/txt_lists/*
 .idea/*
 logs/*
 *.pyc
+*.DS_Store
