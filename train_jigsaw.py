@@ -1,7 +1,7 @@
 import argparse
 
 import os
-os.environ['CUDA_VISIBLE_DEVICES']='2, 3'
+os.environ['CUDA_VISIBLE_DEVICES']='3, 6'
 
 import torch
 #from IPython.core.debugger import set_trace
@@ -194,6 +194,7 @@ class Trainer:
         idx_best = val_res.argmax()
         #print("Best val %g, corresponding test %g - best test: %g" % (val_res.max(), test_res[idx_best], test_res.max()))
         self.logger.save_best(test_res[idx_best].item(), test_res.max().item())
+        print(test_res.max().item())
         return self.logger, self.model
 
 
