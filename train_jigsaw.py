@@ -1,20 +1,19 @@
 import argparse
 
 import os
-os.environ['CUDA_VISIBLE_DEVICES']='3, 6'
-
+os.environ['KMP_WARNINGS'] = '0'
 import torch
 #from IPython.core.debugger import set_trace
 from torch import nn
 from torch.nn import functional as F
 from data import data_helper
 # from IPython.core.debugger import set_trace
-from data.data_helper import available_datasets
+from data.data_helper import available_datasets, pacs_datasets, digits_datasets, vlcs_datasets
 from models import model_factory
 from optimizer.optimizer_helper import get_optim_and_scheduler
 from utils.Logger import Logger
 import numpy as np
-
+import random
 
 def get_args():
     parser = argparse.ArgumentParser(description="Script to launch jigsaw training", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -50,6 +49,8 @@ def get_args():
     parser.add_argument("--suffix", default="", help="Suffix for the logger")
     # nesterov 是一种梯度下降的方法
     parser.add_argument("--nesterov", action='store_true', help="Use nesterov")
+    parser.add_argument("--gpu", "-g", type=int, default=0, help="GPU No.")
+    parser.add_argument("--wo_seed", action='store_true', help="do not use seed")
     
     return parser.parse_args()
 
@@ -63,13 +64,17 @@ class Trainer:
         self.device = device
         model = model_factory.get_network(args.network)(jigsaw_classes=args.jigsaw_n_classes + 1, classes=args.n_classes)
         self.model = model.to(device)
-        # print(self.model)
+
         self.source_loader, self.val_loader = data_helper.get_train_dataloader(args, patches=model.is_patch_based())
-        self.target_loader = data_helper.get_val_dataloader(args, patches=model.is_patch_based())
-        self.test_loaders = {"val": self.val_loader, "test": self.target_loader}
-        self.len_dataloader = len(self.source_loader)
-        print("Dataset size: train %d, val %d, test %d" % (len(self.source_loader.dataset), len(self.val_loader.dataset), len(self.target_loader.dataset)))
-        self.optimizer, self.scheduler = get_optim_and_scheduler(model, args.epochs, args.learning_rate, args.train_all, nesterov=args.nesterov)
+        self.target_test_loaders = data_helper.get_jigsaw_test_dataloaders(args, patches=model.is_patch_based())
+        # Evaluate on Validation & Test datasets
+        self.evaluation_loaders = {"val": self.val_loader, "test": self.target_test_loaders}
+
+        print("Dataset size: train %d, val %d" % (len(self.source_loader.dataset), len(self.val_loader.dataset)))
+        
+        self.optimizer, self.scheduler = get_optim_and_scheduler(model, args.epochs, args.learning_rate, 
+                                                                 args.train_all, nesterov=args.nesterov
+                                                                )
         self.jig_weight = args.jig_weight
         self.only_non_scrambled = args.classify_only_sane
         self.n_classes = args.n_classes
@@ -85,19 +90,10 @@ class Trainer:
         self.model.train()
         for it, ((data, jig_l, class_l), d_idx) in enumerate(self.source_loader):
             data, jig_l, class_l, d_idx = data.to(self.device), jig_l.to(self.device), class_l.to(self.device), d_idx.to(self.device)
-            # absolute_iter_count = it + self.current_epoch * self.len_dataloader
-            # p = float(absolute_iter_count) / self.args.epochs / self.len_dataloader
-            # lambda_val = 2. / (1. + np.exp(-10 * p)) - 1
-            # if domain_error > 2.0:
-            #     lambda_val  = 0
-            # print("Shutting down LAMBDA to prevent implosion")
 
             self.optimizer.zero_grad()
-
-            jigsaw_logit, class_logit = self.model(data)  # , lambda_val=lambda_val)
+            jigsaw_logit, class_logit = self.model(data)
             jigsaw_loss = criterion(jigsaw_logit, jig_l)
-            # domain_loss = criterion(domain_logit, d_idx)
-            # domain_error = domain_loss.item()
 
             if self.only_non_scrambled: # 只对正常图片进行物种分类
                 if self.target_id is not None:
@@ -114,7 +110,6 @@ class Trainer:
                 class_loss = criterion(class_logit, class_l)
             _, cls_pred = class_logit.max(dim=1)
             _, jig_pred = jigsaw_logit.max(dim=1)
-            # _, domain_pred = domain_logit.max(dim=1)
             loss = class_loss + jigsaw_loss * self.jig_weight  # + 0.1 * domain_loss
 
             loss.backward()
@@ -123,12 +118,9 @@ class Trainer:
             self.logger.log(it, len(self.source_loader),
                             {"jigsaw": jigsaw_loss.item(),
                              "class": class_loss.item()
-                            #"domain": domain_loss.item()
                             },
-                            # ,"lambda": lambda_val},
                             {"jigsaw": torch.sum(jig_pred == jig_l.data).item(),
                              "class": torch.sum(cls_pred == class_l.data).item(),
-                            #"domain": torch.sum(domain_pred == d_idx.data).item()
                             },
                             data.shape[0])
             # 解除变量引用与实际值的指向关系
@@ -136,17 +128,42 @@ class Trainer:
 
         self.model.eval()
         with torch.no_grad():
-            for phase, loader in self.test_loaders.items():
-                total = len(loader.dataset)
-                if loader.dataset.isMulti():
-                    jigsaw_correct, class_correct, single_acc = self.do_test_multi(loader)
-                    print("Single vs multi: %g %g" % (float(single_acc) / total, float(class_correct) / total))
+            for phase, loader in self.evaluation_loaders.items():
+                if phase == 'test':
+                    if self.args.source[0] in pacs_datasets:
+                        target_domains = [item for item in pacs_datasets if item not in self.args.source[0]]
+                    elif self.args.source[0] in vlcs_datasets:
+                        target_domains = [item for item in vlcs_datasets if item not in self.args.source]
+                    acc_sum = 0.0
+                    for didx in range(len(loader)):
+                        dkey = phase + '-' + target_domains[didx]
+
+                        test_loader = loader[didx]
+                        test_total = len(test_loader.dataset)
+                        jigsaw_correct, class_correct = self.do_test(test_loader)
+
+                        jigsaw_acc = float(jigsaw_correct) / total
+                        class_acc = float(class_correct) / test_total
+
+                        self.logger.log_test(dkey, {"class": class_acc})
+                        if dkey not in self.results.keys():
+                            self.results[dkey] = torch.zeros(self.args.epochs)
+                        self.results[dkey][self.current_epoch] = class_acc
+                        acc_sum += class_acc
+                    self.logger.log_test(phase, {"class": acc_sum / len(loader)})
+                    self.results[phase][self.current_epoch] = acc_sum / len(loader)
                 else:
-                    jigsaw_correct, class_correct = self.do_test(loader)
-                jigsaw_acc = float(jigsaw_correct) / total
-                class_acc = float(class_correct) / total
-                self.logger.log_test(phase, {"jigsaw": jigsaw_acc, "class": class_acc})
-                self.results[phase][self.current_epoch] = class_acc
+                    total = len(loader.dataset)
+                    if loader.dataset.isMulti():
+                        jigsaw_correct, class_correct, single_acc = self.do_test_multi(loader)
+                        print("Single vs multi: %g %g" % (float(single_acc) / total, float(class_correct) / total))
+                    else:
+                        jigsaw_correct, class_correct = self.do_test(loader)
+
+                    jigsaw_acc = float(jigsaw_correct) / total
+                    class_acc = float(class_correct) / total
+                    self.logger.log_test(phase, {"jigsaw": jigsaw_acc, "class": class_acc})
+                    self.results[phase][self.current_epoch] = class_acc
 
     def do_test(self, loader):
         jigsaw_correct = 0
@@ -191,15 +208,25 @@ class Trainer:
             self._do_epoch()
         val_res = self.results["val"]
         test_res = self.results["test"]
-        idx_best = val_res.argmax()
-        #print("Best val %g, corresponding test %g - best test: %g" % (val_res.max(), test_res[idx_best], test_res.max()))
-        self.logger.save_best(test_res[idx_best].item(), test_res.max().item())
-        print(test_res.max().item())
+        idx__val_best = val_res.argmax()
+        idx_test_best = test_res.argmax()
+        print("Best test acc: %g in epoch: %d" % (test_res.max(), idx_test_best+1))
+        self.logger.save_best(test_res[idx_test_best].item(), test_res.max().item())
         return self.logger, self.model
 
 
 def main():
     args = get_args()
+    if not args.wo_seed :
+        seed_val = 9963
+        print("Using seed: %d!" % seed_val)
+        torch.manual_seed(seed_val)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        np.random.seed(seed_val)
+        random.seed(seed_val)
+
+    torch.cuda.set_device(args.gpu)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     trainer = Trainer(args, device)
     trainer.do_training()
