@@ -1,6 +1,7 @@
 models/pretrained/*
 *.ipynb
 data/txt_lists/*
+exp_res/*
 */__pycache__/*
 .idea/*
 logs/*

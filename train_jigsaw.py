@@ -15,6 +15,16 @@ from utils.Logger import Logger
 import numpy as np
 import random
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 def get_args():
     parser = argparse.ArgumentParser(description="Script to launch jigsaw training", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--source", choices=available_datasets, help="Source", nargs='+')
@@ -38,19 +48,35 @@ def get_args():
     parser.add_argument("--network", choices=model_factory.nets_map.keys(), help="Which network to use", default="caffenet")
     parser.add_argument("--jig_weight", type=float, default=0.1, help="Weight for the jigsaw puzzle")
     parser.add_argument("--ooo_weight", type=float, default=0, help="Weight for odd one out task")
-    parser.add_argument("--tf_logger", default=True, help="If true will save tensorboard compatible logs")
+
+    # Boolean Flag
+    # 'default' is the value that the attribute gets when the argument is absent
+    parser.add_argument("--tf_logger", type=str2bool, nargs='?', 
+                        const=True, default=True,
+                        help="If true will save tensorboard compatible logs")
+    parser.add_argument("--train_all", type=str2bool, nargs='?',
+                        const=True, default=True,
+                        help="If true, all network weights will be trained")
+    parser.add_argument("--nesterov", type=str2bool, nargs='?',
+                        const=True, default=False, 
+                        help="Use nesterov")
+    parser.add_argument("--classify_only_sane", type=str2bool, nargs='?',
+                        const=True, default=False,
+                        help="If true, the network will only try to classify the non scrambled images")
+    parser.add_argument("--TTA",  type=str2bool, nargs='?',
+                        const=True, default=False, 
+                        help="Activate test time data augmentation")
+    
     parser.add_argument("--val_size", type=float, default="0.1", help="Validation size (between 0 and 1)")
     parser.add_argument("--folder_name", default=None, help="Used by the logger to save logs")
     parser.add_argument("--bias_whole_image", default=None, type=float, help="If set, will bias the training procedure to show more often the whole image")
-    parser.add_argument("--TTA",  action='store_false', help="Activate test time data augmentation")
-    parser.add_argument("--classify_only_sane", action='store_true',
-                        help="If true, the network will only try to classify the non scrambled images")
-    parser.add_argument("--train_all", action='store_true', help="If true, all network weights will be trained")
+    
+
     parser.add_argument("--suffix", default="", help="Suffix for the logger")
     # nesterov 是一种梯度下降的方法
-    parser.add_argument("--nesterov", action='store_true', help="Use nesterov")
+    
     parser.add_argument("--gpu", "-g", type=int, default=0, help="GPU No.")
-    parser.add_argument("--wo_seed", action='store_true', help="do not use seed")
+    parser.add_argument("--seed", default=-1,  type=int, help="seed")
     
     return parser.parse_args()
 
@@ -130,10 +156,9 @@ class Trainer:
         with torch.no_grad():
             for phase, loader in self.evaluation_loaders.items():
                 if phase == 'test':
-                    if self.args.source[0] in pacs_datasets:
-                        target_domains = [item for item in pacs_datasets if item not in self.args.source[0]]
-                    elif self.args.source[0] in vlcs_datasets:
-                        target_domains = [item for item in vlcs_datasets if item not in self.args.source]
+                    belonged_dataset = data_helper.get_belonged_dataset(self.args.source[0])
+                    target_domains = [item for item in belonged_dataset if item not in self.args.source]
+
                     acc_sum = 0.0
                     for didx in range(len(loader)):
                         dkey = phase + '-' + target_domains[didx]
@@ -217,14 +242,13 @@ class Trainer:
 
 def main():
     args = get_args()
-    if not args.wo_seed :
-        seed_val = 9963
-        print("Using seed: %d!" % seed_val)
-        torch.manual_seed(seed_val)
+    if args.seed > 0:
+        print("Using seed: %d!" % args.seed)
+        torch.manual_seed(args.seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-        np.random.seed(seed_val)
-        random.seed(seed_val)
+        np.random.seed(args.seed)
+        random.seed(args.seed)
 
     torch.cuda.set_device(args.gpu)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
